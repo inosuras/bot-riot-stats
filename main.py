@@ -1,4 +1,5 @@
 from discord.ext import tasks
+from discord.ext import commands
 import requests
 import discord
 
@@ -15,7 +16,7 @@ except: last_match_id = None  # Si le fichier n'existe pas, initialiser last_mat
 
 intents = discord.Intents.default()
 intents.message_content = True
-client = discord.Client(intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)  #Crée une instance de bot Discord avec le préfixe de commande "!" et les intentions spécifiées.
 
 def fetch_lol_stats(game_name, tag_line):
 
@@ -116,7 +117,7 @@ def fetch_lol_stats(game_name, tag_line):
 async def background_task():
 
     global last_match_id  # Indique que nous utilisons la variable globale last_match_id, ça évite les erreurs de portée de variable.
-    channel = client.get_channel(1458558905016910041) #Ici on récupère l'ID du channel où le bot enverra les messages.
+    channel = bot.get_channel(1458558905016910041) #Ici on récupère l'ID du channel où le bot enverra les messages.
     new_match_id, new_embed = fetch_lol_stats("NK7", "9665") #Appelle la fonction fetch_lol_stats pour obtenir les statistiques de jeu. 
     
     
@@ -128,12 +129,51 @@ async def background_task():
 
 
 
-@client.event
+@bot.command(name="rank")
+async def rank(ctx, riot_id):
+    # Commande Discord pour obtenir le rang d'un joueur en utilisant son Riot ID.
+    try:
+        game_name, tag_line = riot_id.split("#")  #Divise le Riot ID en nom de jeu et ligne de tag.
+        api_key = os.getenv("RIOT_API_KEY")  #Récupère la clé API Riot Games à partir des variables d'environnement pour authentifier les requêtes API dans le fichier .env.
+        url =(f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{game_name}/{tag_line}?api_key={api_key}")
+        response = requests.get(url)      #Créee une requête GET à l'URL spécifiée c'est-à-dire l'API de Riot Games pour obtenir des informations sur un compte Riot ID.
+        if response.status_code == 200:
+            account_data = response.json()      #Stocke les données JSON de la réponse dans une variable pour un traitement ultérieur.
+            puuid = account_data.get("puuid")    #Extrait la valeur associée à la clé "puuid" des données du compte et la stocke dans une variable.
+            rank_url =(f"https://euw1.api.riotgames.com/lol/league/v4/entries/by-puuid/{puuid}?api_key={api_key}")
+            rank_data = requests.get(rank_url)      #Crée une requête GET à l'URL spécifiée pour obtenir les informations de classement du joueur identifié par le PUUID.      
+            rank_data = rank_data.json()      #Stocke les données JSON de la réponse dans une variable pour un traitement ultérieur.
+            tier = "Unranked"
+            division = ""
+            lp = 0
+            wins = 0
+            losses = 0
+            win_rate = 0
+            for entry in rank_data:
+                if entry["queueType"] == "RANKED_SOLO_5x5":
+                    tier = entry["tier"]
+                    division = entry["rank"]
+                    lp = entry["leaguePoints"]
+                    wins = entry["wins"]
+                    losses = entry["losses"]
+                    win_rate = (wins / (wins + losses)) * 100
+                    break
+            await ctx.send(f"{game_name}#{tag_line} {tier} {division} - {lp} LP | {win_rate:.1f}% ({wins}W/{losses}L)")  #Envoie un message avec le rang du joueur dans le channel où la commande a été utilisée.
+        else:
+            await ctx.send("Riot ID non trouvé.")  #Envoie un message d'erreur si le Riot ID n'est pas trouvé.
+            
+    except ValueError:
+        await ctx.send("Eh non, la commande s'écrit avec le tag : Pseudo#Tag") #Envoie un message d'erreur si le format du Riot ID est incorrect. ctx.send permet d'envoyer un message dans le channel où la commande a été utilisée.
+
+    
+
+
+@bot.event
 async def on_ready():
     print("Bot connecté")
     background_task.start()  #Démarre la tâche en arrière-plan lorsque le bot est prêt.
 
 
-client.run(os.getenv("DISCORD_TOKEN"))  #Récupère le token Discord à partir des variables d'environnement pour authentifier le bot Discord dans le fichier env 
+bot.run(os.getenv("DISCORD_TOKEN"))  #Récupère le token Discord à partir des variables d'environnement pour authentifier le bot Discord dans le fichier env 
 
 #Démarre le bot Discord en utilisant le token spécifié pour se connecter à l'API Discord.
