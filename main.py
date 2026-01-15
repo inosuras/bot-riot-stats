@@ -1,3 +1,4 @@
+from keep_alive import keep_alive
 from discord.ext import tasks
 from discord.ext import commands
 import requests
@@ -173,7 +174,7 @@ async def on_ready():
     print("Bot connecté")
     background_task.start()  #Démarre la tâche en arrière-plan lorsque le bot est prêt.
 
-
+keep_alive()  #Démarre le serveur Flask pour maintenir le bot en ligne.
 bot.run(os.getenv("DISCORD_TOKEN"))  #Récupère le token Discord à partir des variables d'environnement pour authentifier le bot Discord dans le fichier env 
 
 #Démarre le bot Discord en utilisant le token spécifié pour se connecter à l'API Discord.
