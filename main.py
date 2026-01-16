@@ -3,17 +3,12 @@ from discord.ext import tasks
 from discord.ext import commands
 import requests
 import discord
+import json
 
 import os
 from dotenv import load_dotenv
 load_dotenv()  # Charge les variables d'environnement à partir du fichier .env
 
-
-try:
-    with open("last match.txt", "r") as f:
-        last_match_id = f.read().strip()  # Lire l'ID du dernier match traité depuis le fichier texte
-
-except: last_match_id = None  # Si le fichier n'existe pas, initialiser last_match_id à None
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -116,18 +111,35 @@ def fetch_lol_stats(game_name, tag_line):
 
 @tasks.loop(minutes=2)
 async def background_task():
-
-    global last_match_id  # Indique que nous utilisons la variable globale last_match_id, ça évite les erreurs de portée de variable.
-    channel = bot.get_channel(1458558905016910041) #Ici on récupère l'ID du channel où le bot enverra les messages.
-    new_match_id, new_embed = fetch_lol_stats("NK7", "9665") #Appelle la fonction fetch_lol_stats pour obtenir les statistiques de jeu. 
+    # Étape 1 : On ouvre le carnet d'adresses (le fichier JSON)
+    try:
+        with open("tracked_players.json", "r") as f:
+            tracked_players = json.load(f)
+    except FileNotFoundError:
+        tracked_players = [] # Si le fichier n'existe pas encore
     
-    
-    if last_match_id is None or last_match_id != new_match_id:  #Vérifie si le dernier ID de match est différent du nouvel ID de match récupéré.
-        await channel.send(embed = new_embed) #Envoie le message avec les statistiques dans le channel spécifié
-        last_match_id = new_match_id  # Met à jour l'ID du dernier match traité
-        with open("last_match.txt", "w") as f:  #Ouvre (ou crée) un fichier texte nommé "last_match.txt" en mode écriture.
-            f.write(str(new_match_id))  #Écrit l'ID du dernier match traité dans le fichier texte pour une persistance des données.
+    # On définit le channel où envoyer les alertes
+    channel = bot.get_channel(1458558905016910041)
 
+    # Étape 2 : On passe en revue chaque joueur de la liste
+    for player in tracked_players:
+        
+        # On interroge l'API pour ce joueur précis
+        new_match_id, new_embed = fetch_lol_stats(player["game_name"], player["tag_line"])
+        
+        # Étape 3 : Le moment de vérité (Comparaison)
+        if new_match_id != player["last_match_id"]:
+            
+            # C'est un nouveau match ! On met à jour le carnet d'adresses (mémoire vive)
+            player["last_match_id"] = new_match_id
+            
+            # Étape 4 : ... et on sauvegarde immédiatement dans le fichier (mémoire dure)
+            with open("tracked_players.json", "w") as f:
+                json.dump(tracked_players, f)
+            
+            # Étape 5 : On prévient tout le monde sur Discord
+            if channel:
+                await channel.send(embed=new_embed)
 
 
 @bot.command(name="rank")
@@ -166,6 +178,51 @@ async def rank(ctx, riot_id):
     except ValueError:
         await ctx.send("Eh non, la commande s'écrit avec le tag : Pseudo#Tag") #Envoie un message d'erreur si le format du Riot ID est incorrect. ctx.send permet d'envoyer un message dans le channel où la commande a été utilisée.
 
+    
+@bot.command(name="track")
+async def track(ctx, riot_id):
+    # Commande Discord pour obtenir le rang d'un joueur en utilisant son Riot ID.
+    try:
+        game_name, tag_line = riot_id.split("#")  #Divise le Riot ID en nom de jeu et ligne de tag.
+
+        try:
+            with open("tracked_players.json", "r") as f:
+                    tracked_players = json.load(f)  # Charge les joueurs suivis existants depuis le fichier JSON
+        except FileNotFoundError:
+                tracked_players = []  # Si le fichier n'existe pas, initialise une liste vide
+
+        for player in tracked_players:
+            if player["game_name"] == game_name and player["tag_line"] == tag_line:
+                await ctx.send(f"Le suivi de {game_name}#{tag_line} est déjà en cours.")  #Envoie un message si le joueur est déjà suivi.
+                return  #Sort de la fonction pour éviter d'ajouter le joueur en double grâce à return.
+
+
+        api_key = os.getenv("RIOT_API_KEY")  #Récupère la clé API Riot Games à partir des variables d'environnement pour authentifier les requêtes API dans le fichier .env.
+        url =(f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{game_name}/{tag_line}?api_key={api_key}")
+        response = requests.get(url)      #Créee une requête GET à l'URL spécifiée c'est-à-dire l'API de Riot Games pour obtenir des informations sur un compte Riot ID.
+        if response.status_code == 200:
+            account_data = response.json()      #Stocke les données JSON de la réponse dans une variable pour un traitement ultérieur.
+            puuid = account_data.get("puuid")    #Extrait la valeur associée à la clé "puuid" des données du compte et la stocke dans une variable.
+
+            last_match_id, last_embed = fetch_lol_stats(game_name, tag_line) #Appelle la fonction fetch_lol_stats pour obtenir les statistiques de jeu.
+
+            player_data = {
+                "puuid": puuid,
+                "game_name": game_name,
+                "tag_line": tag_line,
+                "last_match_id": last_match_id
+            }
+                     
+                    
+            tracked_players.append(player_data)  # Ajoute le nouveau joueur à la liste des joueurs suivis
+            with open("tracked_players.json", "w") as f:               
+
+                json.dump(tracked_players, f)  # Enregistre la liste mise à jour dans le fichier JSON
+                await ctx.send(f"Le suivi de {game_name}#{tag_line} a été ajouté.")  #Envoie un message confirmant que le suivi a été ajouté dans le channel où la commande a été utilisée.
+        else:
+            await ctx.send("Riot ID non trouvé.")  #Envoie un message d'erreur si le Riot ID n'est pas trouvé.
+    except ValueError:
+        await ctx.send("Eh non, la commande s'écrit avec le tag : Pseudo#Tag") #Envoie un message d'erreur si le format du Riot ID est incorrect. ctx.send permet d'envoyer un message dans le channel où la commande a été utilisée.
     
 
 
