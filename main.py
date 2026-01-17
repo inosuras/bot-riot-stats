@@ -4,36 +4,34 @@ from discord.ext import commands
 import requests
 import discord
 import json
-
 import os
+from urllib.parse import quote # <--- NOUVEAU : Pour gérer les espaces dans les URL
+
 from dotenv import load_dotenv
 load_dotenv()  # Charge les variables d'environnement à partir du fichier .env
 
-
-intents = discord.Intents.default()
+intents = discord.Intents.default()  # Activation des intents par défaut
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)  #Crée une instance de bot Discord avec le préfixe de commande "!" et les intentions spécifiées.
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-def fetch_lol_stats(game_name, tag_line):
+def fetch_lol_stats(game_name, tag_line):  # Fonction pour récupérer les stats d'un joueur
+    api_key = os.getenv("RIOT_API_KEY")
+    
+    # --- CORRECTION URL ---
+    # On encode le pseudo pour l'URL (Espace devient %20)
+    game_name_url = quote(game_name)
+    url = (f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{game_name_url}/{tag_line}?api_key={api_key}")
+    # ----------------------
 
-    api_key = os.getenv("RIOT_API_KEY")  #Récupère la clé API Riot Games à partir des variables d'environnement pour authentifier les requêtes API dans le fichier .env.
+    response = requests.get(url)
+    account_data = response.json()
+    puuid = account_data.get("puuid")
 
-    url =(f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{game_name}/{tag_line}?api_key={api_key}")
+    rank_url = (f"https://euw1.api.riotgames.com/lol/league/v4/entries/by-puuid/{puuid}?api_key={api_key}")
+    rank = requests.get(rank_url)
+    rank = rank.json()  # Conversion en JSON et stockage dans une variable
 
-    response = requests.get(url)      #Créee une requête GET à l'URL spécifiée c'est-à-dire l'API de Riot Games pour obtenir des informations sur un compte Riot ID.
-        #print(response.json())      #Affiche la réponse de l'API au format JSON, qui contient les informations du compte Riot ID demandé.
-
-    account_data = response.json()      #Stocke les données JSON de la réponse dans une variable pour un traitement ultérieur.
-
-    puuid = account_data.get("puuid")    #Extrait la valeur associée à la clé "puuid" des données du compte et la stocke dans une variable.
-
-        #print("PUUID:", puuid) #Affiche le PUUID (Player Unique Identifier) du compte Riot ID.
-
-    rank_url =(f"https://euw1.api.riotgames.com/lol/league/v4/entries/by-puuid/{puuid}?api_key={api_key}")
-
-    rank = requests.get(rank_url)      #Crée une requête GET à l'URL spécifiée pour obtenir les informations de classement du joueur identifié par le PUUID.      
-    rank = rank.json()      #Stocke les données JSON de la réponse dans une variable pour un traitement ultérieur.
-    #print(rank)
+# Initialisation des variables de rang par défaut
 
     tier = "Unranked"
     division = ""
@@ -50,28 +48,22 @@ def fetch_lol_stats(game_name, tag_line):
             wins = entry["wins"]
             losses = entry["losses"]
             win_rate = (wins / (wins + losses)) * 100
-            #print(f"Rank: {tier} {division} | {lp} LP | Win Rate: {win_rate:.2f}%")
             break
     
+    matches_url = (f"https://europe.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?start=0&count=1&api_key={api_key}")
+    matches = requests.get(matches_url)
+    matches = matches.json()
 
-    matches_url =(f"https://europe.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?start=0&count=1&api_key={api_key}")
+    match_id = matches[0]
 
-    matches =requests.get(matches_url)      #Crée une requête GET à l'URL spécifiée pour obtenir l'historique des matchs du joueur identifié par le PUUID.
-        #print(matches.json())      #Affiche la réponse de l'API au format JSON, qui contient les identifiants des matchs du joueur.
+    rapport_url = (f"https://europe.api.riotgames.com/lol/match/v5/matches/{match_id}?api_key={api_key}")
+    rapport = requests.get(rapport_url)
+    rapport = rapport.json()
 
-    matches = matches.json()      #Stocke les données JSON de la réponse dans une variable pour un traitement ultérieur.
+    embed = None # Initialisation par sécurité
 
-    match_id = matches[0]      #Extrait le premier identifiant de match de la liste des identifiants de matchs obtenus et le stocke dans une variable.
-        #print("Match ID:", match_id)
+    for participant in rapport["info"]["participants"]:  # Parcours des participants pour trouver le joueur demandé et récupérer ses stats
 
-    rapport_url =(f"https://europe.api.riotgames.com/lol/match/v5/matches/{match_id}?api_key={api_key}")
-
-    rapport = requests.get(rapport_url)      #Crée une requête GET à l'URL spécifiée pour obtenir les détails du match identifié par l'ID de match.
-        #print(rapport.json())      #Affiche la réponse de l'API au format JSON, qui contient les détails du match.
-
-    rapport = rapport.json()      #Stocke les données JSON de la réponse dans une variable pour un traitement ultérieur.
-
-    for participant in rapport["info"]["participants"]:
         if participant["puuid"] == puuid:
             pseudo = participant["summonerName"]
             kills = participant["kills"]
@@ -79,89 +71,99 @@ def fetch_lol_stats(game_name, tag_line):
             assists = participant["assists"]
             champion = participant["championName"]
             game_time = rapport["info"]["gameDuration"]
-            minutes = game_time // 60  #Convertir la durée du jeu en minutes
-            seconds = game_time % 60   #Obtenir les secondes restantes
-            game_time = f"{minutes}:{seconds:02d}" #Formater la durée du jeu en minutes:secondes
+            minutes = game_time // 60
+            seconds = game_time % 60
+            game_time = f"{minutes}:{seconds:02d}"
             vision = participant["visionScore"]
             cs = participant["totalMinionsKilled"] + participant["neutralMinionsKilled"]
-            cs_per_minute = cs / (rapport["info"]["gameDuration"] / 60)
+            
+            # Sécurité pour éviter la division par zéro si la game dure 0s (remake instantané)
+            duration_minutes = rapport["info"]["gameDuration"] / 60
+            cs_per_minute = cs / duration_minutes if duration_minutes > 0 else 0
+
             win = participant["win"]
             if win:
-                couleur_embed = discord.Color.green() #Définir la couleur de l'embed Discord en vert pour une victoire
-                titre_embed = "Victory" #Définir le titre de l'embed Discord pour une victoire
+                couleur_embed = discord.Color.green()
+                titre_embed = "Victory"
             else:
                 couleur_embed = discord.Color.red()
                 titre_embed = "Defeat"
             
-            embed = discord.Embed(title = titre_embed, color = couleur_embed) #Créer un embed Discord avec le titre et la couleur appropriés en fonction du résultat du match.
-
+            embed = discord.Embed(title=titre_embed, color=couleur_embed)
             embed.add_field(name="Player", value=game_name, inline=True)
             embed.add_field(name="Champion", value=champion, inline=True)
             embed.add_field(name="K/D/A", value=f"{kills}/{deaths}/{assists}", inline=True)
-            embed.add_field(name="CS", value=f"{cs} ({cs_per_minute:.1f})" , inline=True)
+            embed.add_field(name="CS", value=f"{cs} ({cs_per_minute:.1f})", inline=True)
             embed.add_field(name="Vision Score", value=vision, inline=True)
             embed.add_field(name="Game Duration", value=game_time, inline=True)
             embed.add_field(name="Rank", value=f"{tier} {division} - {lp} LP", inline=True)
             embed.add_field(name="Win Rate", value=f"{win_rate:.2f}% ({wins}W/{losses}L)", inline=True)
             break
-    return match_id, embed
-# Parcourt la liste des participants dans les informations du match pour trouver le joueur correspondant au PUUID.
-# Une fois trouvé, il extrait et affiche les statistiques de kills, deaths et assists du joueur ainsi que le champion joué et la durée de la partie en minutes.
+            
+    return match_id, embed  # Retourne l'ID du match et l'embed
 
 
 @tasks.loop(minutes=2)
 async def background_task():
-    # Étape 1 : On ouvre le carnet d'adresses (le fichier JSON)
-    try:
+    try:  
         with open("tracked_players.json", "r") as f:
             tracked_players = json.load(f)
     except FileNotFoundError:
-        tracked_players = [] # Si le fichier n'existe pas encore
+        tracked_players = []
     
-    # On définit le channel où envoyer les alertes
-    channel = bot.get_channel(int(os.getenv("CHANNEL_DISCORD")))  # Remplacez par l'ID de votre channel Discord
+    try:
+        channel_id = int(os.getenv("CHANNEL_DISCORD"))
+        channel = bot.get_channel(channel_id)
+    except (TypeError, ValueError):
+        print("Erreur : CHANNEL_DISCORD n'est pas défini ou n'est pas un nombre valide dans le .env")
+        return
 
-    # Étape 2 : On passe en revue chaque joueur de la liste
     for player in tracked_players:
-        
-        # On interroge l'API pour ce joueur précis
-        new_match_id, new_embed = fetch_lol_stats(player["game_name"], player["tag_line"])
-        
-        # Étape 3 : Le moment de vérité (Comparaison)
-        if new_match_id != player["last_match_id"]:
+        # --- CORRECTION BOUCLE ---
+        # Ajout du try/except pour qu'une erreur sur un joueur ne stoppe pas tout le bot
+        try:
+            new_match_id, new_embed = fetch_lol_stats(player["game_name"], player["tag_line"])
             
-            # C'est un nouveau match ! On met à jour le carnet d'adresses (mémoire vive)
-            player["last_match_id"] = new_match_id
-            
-            # Étape 4 : ... et on sauvegarde immédiatement dans le fichier (mémoire dure)
-            with open("tracked_players.json", "w") as f:
-                json.dump(tracked_players, f)
-            
-            # Étape 5 : On prévient tout le monde sur Discord
-            if channel:
-                await channel.send(embed=new_embed)
+            if new_match_id != player["last_match_id"]:
+                player["last_match_id"] = new_match_id
+                
+                with open("tracked_players.json", "w") as f:
+                    json.dump(tracked_players, f)
+                
+                if channel:
+                    await channel.send(embed=new_embed)
+                    
+        except Exception as e:
+            print(f"Erreur lors du tracking de {player['game_name']} : {e}")
+            continue # Passe au joueur suivant malgré l'erreur
+        # -------------------------
 
 
 @bot.command(name="rank")
-async def rank(ctx, *, riot_id):
-    # Commande Discord pour obtenir le rang d'un joueur en utilisant son Riot ID.
+async def rank(ctx, *, riot_id: str):  # Commande pour récupérer le rang d'un joueur, le * permet de prendre en compte les espaces dans le pseudo
     try:
-        game_name, tag_line = riot_id.split("#")  #Divise le Riot ID en nom de jeu et ligne de tag.
-        api_key = os.getenv("RIOT_API_KEY")  #Récupère la clé API Riot Games à partir des variables d'environnement pour authentifier les requêtes API dans le fichier .env.
-        url =(f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{game_name}/{tag_line}?api_key={api_key}")
-        response = requests.get(url)      #Créee une requête GET à l'URL spécifiée c'est-à-dire l'API de Riot Games pour obtenir des informations sur un compte Riot ID.
+        game_name, tag_line = riot_id.split("#")
+        api_key = os.getenv("RIOT_API_KEY")
+        
+        # --- CORRECTION URL ---
+        game_name_url = quote(game_name)
+        url = (f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{game_name_url}/{tag_line}?api_key={api_key}")
+        # ----------------------
+        
+        response = requests.get(url)
         if response.status_code == 200:
-            account_data = response.json()      #Stocke les données JSON de la réponse dans une variable pour un traitement ultérieur.
-            puuid = account_data.get("puuid")    #Extrait la valeur associée à la clé "puuid" des données du compte et la stocke dans une variable.
-            rank_url =(f"https://euw1.api.riotgames.com/lol/league/v4/entries/by-puuid/{puuid}?api_key={api_key}")
-            rank_data = requests.get(rank_url)      #Crée une requête GET à l'URL spécifiée pour obtenir les informations de classement du joueur identifié par le PUUID.      
-            rank_data = rank_data.json()      #Stocke les données JSON de la réponse dans une variable pour un traitement ultérieur.
+            account_data = response.json()
+            puuid = account_data.get("puuid")
+            rank_url = (f"https://euw1.api.riotgames.com/lol/league/v4/entries/by-puuid/{puuid}?api_key={api_key}")
+            rank_data = requests.get(rank_url).json()
+            
             tier = "Unranked"
             division = ""
             lp = 0
             wins = 0
             losses = 0
             win_rate = 0
+            
             for entry in rank_data:
                 if entry["queueType"] == "RANKED_SOLO_5x5":
                     tier = entry["tier"]
@@ -171,67 +173,73 @@ async def rank(ctx, *, riot_id):
                     losses = entry["losses"]
                     win_rate = (wins / (wins + losses)) * 100
                     break
-            await ctx.send(f"{game_name}#{tag_line} {tier} {division} - {lp} LP | {win_rate:.1f}% ({wins}W/{losses}L)")  #Envoie un message avec le rang du joueur dans le channel où la commande a été utilisée.
+            await ctx.send(f"{game_name}#{tag_line} {tier} {division} - {lp} LP | {win_rate:.1f}% ({wins}W/{losses}L)")
         else:
-            await ctx.send("Riot ID non trouvé.")  #Envoie un message d'erreur si le Riot ID n'est pas trouvé.
+            await ctx.send("Riot ID non trouvé.")
             
     except ValueError:
-        await ctx.send("Eh non, la commande s'écrit avec le tag : Pseudo#Tag") #Envoie un message d'erreur si le format du Riot ID est incorrect. ctx.send permet d'envoyer un message dans le channel où la commande a été utilisée.
+        await ctx.send("Eh non, la commande s'écrit avec le tag : Pseudo#Tag")
 
-    
+
 @bot.command(name="track")
-async def track(ctx, *, riot_id):
-    # Commande Discord pour obtenir le rang d'un joueur en utilisant son Riot ID.
+async def track(ctx, *, riot_id: str):
     try:
-        game_name, tag_line = riot_id.split("#")  #Divise le Riot ID en nom de jeu et ligne de tag.
+        game_name, tag_line = riot_id.split("#")
 
         try:
             with open("tracked_players.json", "r") as f:
-                    tracked_players = json.load(f)  # Charge les joueurs suivis existants depuis le fichier JSON
+                tracked_players = json.load(f)
         except FileNotFoundError:
-                tracked_players = []  # Si le fichier n'existe pas, initialise une liste vide
+            tracked_players = []
 
+        # Vérification doublon
         for player in tracked_players:
             if player["game_name"] == game_name and player["tag_line"] == tag_line:
-                await ctx.send(f"Le suivi de {game_name}#{tag_line} est déjà en cours.")  #Envoie un message si le joueur est déjà suivi.
-                return  #Sort de la fonction pour éviter d'ajouter le joueur en double grâce à return.
+                await ctx.send(f"Le suivi de {game_name}#{tag_line} est déjà en cours.")
+                return
 
-
-        api_key = os.getenv("RIOT_API_KEY")  #Récupère la clé API Riot Games à partir des variables d'environnement pour authentifier les requêtes API dans le fichier .env.
-        url =(f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{game_name}/{tag_line}?api_key={api_key}")
-        response = requests.get(url)      #Créee une requête GET à l'URL spécifiée c'est-à-dire l'API de Riot Games pour obtenir des informations sur un compte Riot ID.
+        api_key = os.getenv("RIOT_API_KEY")
+        
+        # --- CORRECTION URL ---
+        game_name_url = quote(game_name)
+        url = (f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{game_name_url}/{tag_line}?api_key={api_key}")
+        # ----------------------
+        
+        response = requests.get(url)
+        
         if response.status_code == 200:
-            account_data = response.json()      #Stocke les données JSON de la réponse dans une variable pour un traitement ultérieur.
-            puuid = account_data.get("puuid")    #Extrait la valeur associée à la clé "puuid" des données du compte et la stocke dans une variable.
+            account_data = response.json()
+            puuid = account_data.get("puuid")
 
-            last_match_id, last_embed = fetch_lol_stats(game_name, tag_line) #Appelle la fonction fetch_lol_stats pour obtenir les statistiques de jeu.
+            # On récupère le dernier match pour initialiser le tracking
+            last_match_id, last_embed = fetch_lol_stats(game_name, tag_line)
 
             player_data = {
                 "puuid": puuid,
-                "game_name": game_name,
+                "game_name": game_name, # On garde le nom original (avec espace) pour l'affichage
                 "tag_line": tag_line,
                 "last_match_id": last_match_id
             }
-                     
-                    
-            tracked_players.append(player_data)  # Ajoute le nouveau joueur à la liste des joueurs suivis
-            with open("tracked_players.json", "w") as f:               
-
-                json.dump(tracked_players, f)  # Enregistre la liste mise à jour dans le fichier JSON
-                await ctx.send(f"Le suivi de {game_name}#{tag_line} a été ajouté.")  #Envoie un message confirmant que le suivi a été ajouté dans le channel où la commande a été utilisée.
+            
+            # --- CORRECTION INDENTATION ---
+            # Ces lignes ne s'exécutent QUE si response.status_code == 200
+            tracked_players.append(player_data)
+            with open("tracked_players.json", "w") as f:
+                json.dump(tracked_players, f)
+                await ctx.send(f"Le suivi de {game_name}#{tag_line} a été ajouté.")
+            # ------------------------------
+            
         else:
-            await ctx.send("Riot ID non trouvé.")  #Envoie un message d'erreur si le Riot ID n'est pas trouvé.
+            await ctx.send("Riot ID non trouvé (Vérifiez l'orthographe ou le tag).")
+            
     except ValueError:
-        await ctx.send("Eh non, la commande s'écrit avec le tag : Pseudo#Tag") #Envoie un message d'erreur si le format du Riot ID est incorrect. ctx.send permet d'envoyer un message dans le channel où la commande a été utilisée.
-    
+        await ctx.send("Eh non, la commande s'écrit avec le tag : Pseudo#Tag")
 
 
 @bot.event
 async def on_ready():
     print("Bot connecté")
-    background_task.start()  #Démarre la tâche en arrière-plan lorsque le bot est prêt.
+    background_task.start()
 
-keep_alive()  #Démarre le serveur Flask pour maintenir le bot en ligne.
-bot.run(os.getenv("DISCORD_TOKEN"))  #Récupère le token Discord à partir des variables d'environnement pour authentifier le bot Discord dans le fichier env 
-
-#Démarre le bot Discord en utilisant le token spécifié pour se connecter à l'API Discord.
+keep_alive()  # Démarre le serveur Flask pour garder le bot en vie
+bot.run(os.getenv("DISCORD_TOKEN"))
