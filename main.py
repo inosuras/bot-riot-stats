@@ -119,7 +119,7 @@ async def background_task():
         tracked_players = [] # Si le fichier n'existe pas encore
     
     # On définit le channel où envoyer les alertes
-    channel = bot.get_channel(1458558905016910041)
+    channel = bot.get_channel(int(os.getenv("CHANNEL_DISCORD")))  # Remplacez par l'ID de votre channel Discord
 
     # Étape 2 : On passe en revue chaque joueur de la liste
     for player in tracked_players:
@@ -143,7 +143,7 @@ async def background_task():
 
 
 @bot.command(name="rank")
-async def rank(ctx, riot_id):
+async def rank(ctx, *, riot_id):
     # Commande Discord pour obtenir le rang d'un joueur en utilisant son Riot ID.
     try:
         game_name, tag_line = riot_id.split("#")  #Divise le Riot ID en nom de jeu et ligne de tag.
@@ -180,7 +180,7 @@ async def rank(ctx, riot_id):
 
     
 @bot.command(name="track")
-async def track(ctx, riot_id):
+async def track(ctx, *, riot_id):
     # Commande Discord pour obtenir le rang d'un joueur en utilisant son Riot ID.
     try:
         game_name, tag_line = riot_id.split("#")  #Divise le Riot ID en nom de jeu et ligne de tag.
